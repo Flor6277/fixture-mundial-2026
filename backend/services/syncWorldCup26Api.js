@@ -1,94 +1,94 @@
-const pool = require('../database');
-const { recalcularTodasLasTablas } = require('../utils/tournament');
-const https = require('https');
+const pool = require("../database");
+const { recalcularTodasLasTablas } = require("../utils/tournament");
+const https = require("https");
 
-const WORLD_CUP_26_API_URL = process.env.WORLD_CUP_26_API_URL || 'https://worldcup26.ir/get/games';
+const WORLD_CUP_26_API_URL = process.env.WORLD_CUP_26_API_URL || "https://worldcup26.ir/get/games";
 
 const TEAM_TO_CODE = {
-  'Mexico': 'MEX',
-  'South Africa': 'RSA',
-  'South Korea': 'KOR',
-  'Czech Republic': 'CZE',
-  'Czechia': 'CZE',
+  "Mexico": "MEX",
+  "South Africa": "RSA",
+  "South Korea": "KOR",
+  "Czech Republic": "CZE",
+  "Czechia": "CZE",
 
-  'Canada': 'CAN',
-  'Bosnia and Herzegovina': 'BIH',
-  'Qatar': 'QAT',
-  'Switzerland': 'SUI',
+  "Canada": "CAN",
+  "Bosnia and Herzegovina": "BIH",
+  "Qatar": "QAT",
+  "Switzerland": "SUI",
 
-  'Brazil': 'BRA',
-  'Morocco': 'MAR',
-  'Haiti': 'HTI',
-  'Scotland': 'SCO',
+  "Brazil": "BRA",
+  "Morocco": "MAR",
+  "Haiti": "HTI",
+  "Scotland": "SCO",
 
-  'United States': 'USA',
-  'USA': 'USA',
-  'Paraguay': 'PAR',
-  'Australia': 'AUS',
-  'Turkey': 'TUR',
+  "United States": "USA",
+  "USA": "USA",
+  "Paraguay": "PAR",
+  "Australia": "AUS",
+  "Turkey": "TUR",
 
-  'Germany': 'GER',
-  'Curacao': 'CUW',
-  'Curaçao': 'CUW',
-  'Ivory Coast': 'CIV',
-  'Ecuador': 'ECU',
+  "Germany": "GER",
+  "Curacao": "CUW",
+  "Curaçao": "CUW",
+  "Ivory Coast": "CIV",
+  "Ecuador": "ECU",
 
-  'Netherlands': 'NED',
-  'Japan': 'JPN',
-  'Sweden': 'SWE',
-  'Tunisia': 'TUN',
+  "Netherlands": "NED",
+  "Japan": "JPN",
+  "Sweden": "SWE",
+  "Tunisia": "TUN",
 
-  'Belgium': 'BEL',
-  'Egypt': 'EGY',
-  'Iran': 'IRI',
-  'New Zealand': 'NZL',
+  "Belgium": "BEL",
+  "Egypt": "EGY",
+  "Iran": "IRI",
+  "New Zealand": "NZL",
 
-  'Spain': 'ESP',
-  'Cape Verde': 'CPV',
-  'Saudi Arabia': 'KSA',
-  'Uruguay': 'URU',
+  "Spain": "ESP",
+  "Cape Verde": "CPV",
+  "Saudi Arabia": "KSA",
+  "Uruguay": "URU",
 
-  'France': 'FRA',
-  'Senegal': 'SEN',
-  'Iraq': 'IRQ',
-  'Norway': 'NOR',
+  "France": "FRA",
+  "Senegal": "SEN",
+  "Iraq": "IRQ",
+  "Norway": "NOR",
 
-  'Argentina': 'ARG',
-  'Algeria': 'DZA',
-  'Austria': 'AUT',
-  'Jordan': 'JOR',
+  "Argentina": "ARG",
+  "Algeria": "DZA",
+  "Austria": "AUT",
+  "Jordan": "JOR",
 
-  'Portugal': 'POR',
-  'DR Congo': 'COD',
-  'Democratic Republic of the Congo': 'COD',
-  'Uzbekistan': 'UZB',
-  'Colombia': 'COL',
+  "Portugal": "POR",
+  "DR Congo": "COD",
+  "Democratic Republic of the Congo": "COD",
+  "Uzbekistan": "UZB",
+  "Colombia": "COL",
 
-  'England': 'ENG',
-  'Croatia': 'CRO',
-  'Ghana': 'GHA',
-  'Panama': 'PAN'
+  "England": "ENG",
+  "Croatia": "CRO",
+  "Ghana": "GHA",
+  "Panama": "PAN"
 };
 
 function downloadJson(url) {
   return new Promise((resolve, reject) => {
-    const request = https.request(new URL(url), { method: 'GET' }, response => {
-      let data = '';
+    const request = https.request(new URL(url), { method: "GET" }, response => {
+      let data = "";
 
-      response.on('data', chunk => {
+      response.on("data", chunk => {
         data += chunk;
       });
 
-      response.on('end', () => {
+      response.on("end", () => {
         try {
           resolve(JSON.parse(data));
         } catch (error) {
-          reject(new Error('La respuesta de worldcup26.ir no es JSON válido'));
+          reject(new Error("La respuesta de worldcup26.ir no es JSON válido"));
         }
       });
     });
 
-    request.on('error', error => {
+    request.on("error", error => {
       reject(error);
     });
 
@@ -97,21 +97,21 @@ function downloadJson(url) {
 }
 
 function normalizeFinished(value) {
-  return String(value || '').toUpperCase() === 'TRUE';
+  return String(value || "").toUpperCase() === "TRUE";
 }
 
 function isNotStarted(value) {
-  return String(value || '').toLowerCase() === 'notstarted';
+  return String(value || "").toLowerCase() === "notstarted";
 }
 
 function isFinishedText(value) {
-  return String(value || '').toLowerCase() === 'finished';
+  return String(value || "").toLowerCase() === "finished";
 }
 
 function parseScore(value) {
   let result = null;
 
-  if (value !== null && value !== undefined && value !== '') {
+  if (value !== null && value !== undefined && value !== "") {
     const parsed = Number(value);
 
     if (!Number.isNaN(parsed)) {
@@ -124,7 +124,7 @@ function parseScore(value) {
 
 function parseMinute(value) {
   let result = null;
-  const parsed = parseInt(String(value || '').replace(/[^0-9]/g, ''), 10);
+  const parsed = parseInt(String(value || "").replace(/[^0-9]/g, ""), 10);
 
   if (!Number.isNaN(parsed)) {
     result = parsed;
@@ -178,6 +178,14 @@ async function updateFinishedMatch(client, match, game, summary) {
         SET home_score = $1,
             away_score = $2,
             status = 'played',
+            is_confirmed = true,
+            confirmed_by = (
+              SELECT id
+              FROM users
+              WHERE role = 'admin'
+              ORDER BY id
+              LIMIT 1
+            ),
             live_status = 'finished',
             live_minute = NULL,
             live_second = NULL,
@@ -190,7 +198,8 @@ async function updateFinishedMatch(client, match, game, summary) {
             home_score IS DISTINCT FROM $1 OR
             away_score IS DISTINCT FROM $2 OR
             status IS DISTINCT FROM 'played' OR
-            live_status IS DISTINCT FROM 'finished'
+            live_status IS DISTINCT FROM 'finished' OR
+            is_confirmed IS DISTINCT FROM true
           )
         RETURNING group_id
       `, [homeScore, awayScore, match.id]);
@@ -253,14 +262,14 @@ async function syncWorldCup26Api() {
     summary.gamesRead = games.length;
 
     for (const game of games) {
-      if (game.type === 'group') {
+      if (game.type === "group") {
         summary.groupGamesRead += 1;
 
         const match = await findLocalMatch(client, game);
 
         if (match) {
           const finished = normalizeFinished(game.finished);
-          const statusText = String(game.time_elapsed || '').toLowerCase();
+          const statusText = String(game.time_elapsed || "").toLowerCase();
 
           if (finished || isFinishedText(statusText)) {
             await updateFinishedMatch(client, match, game, summary);
