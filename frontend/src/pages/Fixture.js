@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from '../utils/axios';
-import { Filter, Search, Pencil, CheckCircle, PlusCircle } from 'lucide-react';
+import { Filter, Search, Pencil, PlusCircle } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useAuth } from '../context/AuthContext';
 import ResultModal from '../components/ResultModal';
 
+const PLAYED_STATUSES = ['played', 'confirmed', 'edited'];
 
 function formatSingleSlotRule(rule) {
   let label = rule || 'Por definir';
@@ -44,7 +45,6 @@ function formatSlotRule(rule) {
   return label;
 }
 
-
 export default function Fixture() {
   const { isAdmin } = useAuth();
   const [matches, setMatches] = useState([]);
@@ -54,9 +54,10 @@ export default function Fixture() {
   const [modal, setModal] = useState(null);
 
   const statusFilterLabels = {
-    scheduled: 'Programado',
-    played: 'Jugado',
-    confirmed: 'Confirmado',
+    scheduled: 'Próximo',
+    live: 'En vivo',
+    played: 'Finalizado',
+    confirmed: 'Finalizado',
     edited: 'Editado'
   };
 
@@ -69,7 +70,7 @@ export default function Fixture() {
   }, [matches]);
 
   const statusOptions = useMemo(() => {
-    return Array.from(new Set(matches.map(match => match.status).filter(Boolean)));
+    return Array.from(new Set(matches.map(match => getMatchStatusKey(match)).filter(Boolean)));
   }, [matches]);
 
   useEffect(() => {
@@ -96,7 +97,7 @@ export default function Fixture() {
     }
 
     if (filters.status) {
-      result = result.filter(m => m.status === filters.status);
+      result = result.filter(m => getMatchStatusKey(m) === filters.status);
     }
 
     result.sort((a, b) => {
@@ -111,18 +112,12 @@ export default function Fixture() {
   }, [matches, filters]);
 
   const pendingMatches = useMemo(() => {
-    return filtered.filter(match =>
-      match.status === 'scheduled' ||
-      match.status === 'live'
-    );
+    return filtered.filter(match => isUpcomingMatch(match) || isLiveMatch(match));
   }, [filtered]);
 
   const playedMatches = useMemo(() => {
     return filtered
-      .filter(match =>
-        match.status !== 'scheduled' &&
-        match.status !== 'live'
-      )
+      .filter(match => isFinishedMatch(match))
       .sort((a, b) => {
         const dateA = a.match_date ? new Date(a.match_date).getTime() : 0;
         const dateB = b.match_date ? new Date(b.match_date).getTime() : 0;
@@ -137,7 +132,7 @@ export default function Fixture() {
     for (const match of matchesToGroup) {
       const dateKey = match.match_date
         ? new Date(match.match_date).toLocaleDateString('es-AR', {
-                weekday: 'long',
+            weekday: 'long',
             day: '2-digit',
             month: 'long',
             year: 'numeric'
@@ -179,16 +174,6 @@ export default function Fixture() {
     }
   };
 
-  const confirmResult = async (match) => {
-    try {
-      await axios.post(`/api/matches/${match.match_number}/confirm`);
-      toast.success('Resultado confirmado');
-      fetchMatches();
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Error al confirmar resultado');
-    }
-  };
-
   const phases = {
     group_stage: 'Fase de Grupos',
     round_of_32: 'Dieciseisavos',
@@ -204,7 +189,7 @@ export default function Fixture() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 overflow-x-hidden">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-white">📅 Fixture completo</h2>
@@ -218,23 +203,41 @@ export default function Fixture() {
           <span className="text-sm font-medium">Filtros</span>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <select value={filters.phase} onChange={e => setFilters({ ...filters, phase: e.target.value })} className="bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+          <select
+            value={filters.phase}
+            onChange={e => setFilters({ ...filters, phase: e.target.value })}
+            className="bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
             <option value="">Todas las fases</option>
             {phaseOptions.map(key => <option key={key} value={key}>{phases[key] || key}</option>)}
           </select>
 
-          <select value={filters.group} onChange={e => setFilters({ ...filters, group: e.target.value })} className="bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <select
+            value={filters.group}
+            onChange={e => setFilters({ ...filters, group: e.target.value })}
+            className="bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
             <option value="">Todos los grupos</option>
             {groupOptions.map(g => <option key={g} value={g}>Grupo {g}</option>)}
           </select>
 
           <div className="relative">
             <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
-            <input type="text" placeholder="Buscar país..." value={filters.country} onChange={e => setFilters({ ...filters, country: e.target.value })} className="w-full pl-9 pr-3 py-2 bg-white/5 border border-white/20 rounded-lg text-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input
+              type="text"
+              placeholder="Buscar país..."
+              value={filters.country}
+              onChange={e => setFilters({ ...filters, country: e.target.value })}
+              className="w-full pl-9 pr-3 py-2 bg-white/5 border border-white/20 rounded-lg text-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
 
-          <select value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })} className="bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <select
+            value={filters.status}
+            onChange={e => setFilters({ ...filters, status: e.target.value })}
+            className="bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
             <option value="">Todos los estados</option>
             {statusOptions.map(status => <option key={status} value={status}>{statusFilterLabels[status] || status}</option>)}
           </select>
@@ -249,7 +252,6 @@ export default function Fixture() {
           isAdmin={isAdmin}
           onLoadMatch={(match) => setModal({ match, mode: 'create' })}
           onEditMatch={(match) => setModal({ match, mode: 'edit' })}
-          onConfirmMatch={confirmResult}
         />
 
         <FixtureSection
@@ -259,7 +261,6 @@ export default function Fixture() {
           isAdmin={isAdmin}
           onLoadMatch={(match) => setModal({ match, mode: 'create' })}
           onEditMatch={(match) => setModal({ match, mode: 'edit' })}
-          onConfirmMatch={confirmResult}
         />
 
         {filtered.length === 0 && <p className="text-center text-gray-400 py-8">No se encontraron partidos.</p>}
@@ -277,8 +278,45 @@ export default function Fixture() {
   );
 }
 
+function isLiveMatch(match) {
+  const liveStatuses = ['live', 'halftime', 'half_time'];
 
-function FixtureSection({ title, description, groupedMatches, isAdmin, onLoadMatch, onEditMatch, onConfirmMatch }) {
+  return liveStatuses.includes(match.live_status) || match.status === 'live';
+}
+
+function isFinishedMatch(match) {
+  return PLAYED_STATUSES.includes(match.status) || match.live_status === 'finished';
+}
+
+function isUpcomingMatch(match) {
+  return match.status === 'scheduled' && !isLiveMatch(match);
+}
+
+function getMatchStatusKey(match) {
+  let status = match.status;
+
+  if (isLiveMatch(match)) {
+    status = 'live';
+  } else if (isFinishedMatch(match)) {
+    status = match.status || 'played';
+  }
+
+  return status;
+}
+
+function getLiveTimeLabel(match) {
+  let label = 'En vivo';
+
+  if (match.live_status === 'halftime' || match.live_status === 'half_time') {
+    label = 'Entretiempo';
+  } else if (match.live_minute !== null && match.live_minute !== undefined) {
+    label = `${match.live_minute}'`;
+  }
+
+  return label;
+}
+
+function FixtureSection({ title, description, groupedMatches, isAdmin, onLoadMatch, onEditMatch }) {
   const totalMatches = groupedMatches.reduce((total, [, matches]) => total + matches.length, 0);
 
   return (
@@ -309,7 +347,6 @@ function FixtureSection({ title, description, groupedMatches, isAdmin, onLoadMat
                     isAdmin={isAdmin}
                     onLoad={() => onLoadMatch(match)}
                     onEdit={() => onEditMatch(match)}
-                    onConfirm={() => onConfirmMatch(match)}
                   />
                 ))}
               </div>
@@ -321,9 +358,11 @@ function FixtureSection({ title, description, groupedMatches, isAdmin, onLoadMat
   );
 }
 
-function MatchCard({ match, isAdmin, onLoad, onEdit, onConfirm }) {
-  const statusColors = { scheduled: 'border-gray-600', played: 'border-yellow-500', confirmed: 'border-green-500', edited: 'border-orange-500' };
-  const statusLabels = { scheduled: 'Programado', played: 'Jugado', confirmed: 'Confirmado', edited: 'Editado' };
+function MatchCard({ match, isAdmin, onLoad, onEdit }) {
+  const isLive = isLiveMatch(match);
+  const isFinished = isFinishedMatch(match);
+  const isUpcoming = isUpcomingMatch(match);
+
   const phaseLabels = {
     group_stage: 'Fase de grupos',
     round_of_32: 'Dieciseisavos',
@@ -338,52 +377,94 @@ function MatchCard({ match, isAdmin, onLoad, onEdit, onConfirm }) {
     ? `Grupo ${match.group_name}`
     : phaseLabels[match.phase] || match.phase;
 
+  const homeScore = isLive ? match.live_home_score ?? match.home_score : match.home_score;
+  const awayScore = isLive ? match.live_away_score ?? match.away_score : match.away_score;
   const hasResult = match.home_score !== null && match.away_score !== null;
 
   const timeLabel = match.match_date
     ? new Date(match.match_date).toLocaleTimeString('es-AR', {
         hour: '2-digit',
-        minute: '2-digit'
+        minute: '2-digit',
+        hour12: false
       })
     : '--:--';
 
+  const statusData = getStatusData(match);
+
   return (
-    <div className={`bg-white/5 backdrop-blur rounded-xl p-4 border-l-4 ${statusColors[match.status] || 'border-gray-600'} hover:bg-white/10 transition`}>
+    <div className={`bg-white/5 backdrop-blur rounded-xl p-4 border-l-4 ${statusData.border} hover:bg-white/10 transition`}>
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap min-w-0">
           <span className="text-sm font-bold text-yellow-300 min-w-[54px]">{timeLabel}</span>
           <span className="text-xs font-bold text-gray-400">#{match.match_number}</span>
           <span className="text-xs px-2 py-1 bg-white/10 rounded text-gray-300">{phaseLabel}</span>
-          <span className="text-xs px-2 py-1 rounded bg-white/10 text-gray-300">{statusLabels[match.status] || match.status}</span>
+          <span className={`text-xs px-2 py-1 rounded border ${statusData.badge}`}>
+            {isLive && <span className="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse mr-1"></span>}
+            {statusData.label}
+          </span>
         </div>
 
-        <div className="text-xs text-gray-400">
+        <div className="text-xs text-gray-400 break-words">
           {match.stadium || 'Sede por definir'} · {match.city || 'Ciudad por definir'}
         </div>
       </div>
 
-      <div className="flex items-center justify-center gap-4 md:gap-6 mt-3">
-        <div className="flex items-center gap-2 flex-1 justify-end text-right">
-          <span className="text-base md:text-lg font-bold text-white">{match.home_name || formatSlotRule(match.slot_home_rule)}</span></div>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-4 mt-3">
+        <TeamName name={match.home_name || formatSlotRule(match.slot_home_rule)} align="right" />
 
-        <div className="bg-[#0a1628] px-4 md:px-6 py-3 rounded-xl border border-white/20 min-w-[96px] text-center">
-          <span className="text-2xl font-bold text-white">{match.home_score !== null ? match.home_score : '-'} <span className="text-gray-500">:</span> {match.away_score !== null ? match.away_score : '-'}</span>
-          {match.home_penalties !== null && <div className="text-xs text-yellow-400 mt-1">Penales: {match.home_penalties} - {match.away_penalties}</div>}
+        <div className="bg-[#0a1628] px-3 sm:px-5 py-3 rounded-xl border border-white/20 min-w-[88px] sm:min-w-[104px] text-center">
+          {isUpcoming ? (
+            <span className="text-xs sm:text-sm font-bold text-orange-200">vs</span>
+          ) : (
+            <span className="text-xl sm:text-2xl font-bold text-white">
+              {homeScore !== null && homeScore !== undefined ? homeScore : '-'}
+              <span className="text-gray-500"> : </span>
+              {awayScore !== null && awayScore !== undefined ? awayScore : '-'}
+            </span>
+          )}
+
+          {isLive && (
+            <div className="text-xs text-green-300 font-bold mt-1">
+              {getLiveTimeLabel(match)}
+            </div>
+          )}
+
+          {match.home_penalties !== null && (
+            <div className="text-xs text-yellow-400 mt-1">
+              Penales: {match.home_penalties} - {match.away_penalties}
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center gap-2 flex-1"><span className="text-base md:text-lg font-bold text-white">{match.away_name || formatSlotRule(match.slot_away_rule)}</span>
-        </div>
+        <TeamName name={match.away_name || formatSlotRule(match.slot_away_rule)} align="left" />
       </div>
 
       <div className="flex flex-col md:flex-row md:items-center justify-between mt-3 gap-3 text-xs text-gray-400">
-        <span>{match.is_confirmed ? 'Resultado confirmado' : 'Pendiente de confirmación'}</span>
+        <span>
+          {isLive && `Partido en curso · ${getLiveTimeLabel(match)}`}
+          {isUpcoming && 'Partido programado'}
+          {isFinished && 'Resultado finalizado'}
+        </span>
 
         {isAdmin && (
           <div className="flex gap-2 flex-wrap">
-            {!hasResult && <button onClick={onLoad} className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"><PlusCircle size={14} /> Cargar</button>}
-            {hasResult && <button onClick={onEdit} className="flex items-center gap-1 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg"><Pencil size={14} /> Editar</button>}
-            {hasResult && !match.is_confirmed && <button onClick={onConfirm} className="flex items-center gap-1 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg"><CheckCircle size={14} /> Confirmar</button>}
-            {match.is_confirmed && <span className="flex items-center gap-1 text-green-400"><CheckCircle size={14} /> Confirmado</span>}
+            {!hasResult && (
+              <button
+                onClick={onLoad}
+                className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
+              >
+                <PlusCircle size={14} /> Cargar
+              </button>
+            )}
+
+            {hasResult && (
+              <button
+                onClick={onEdit}
+                className="flex items-center gap-1 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg"
+              >
+                <Pencil size={14} /> Editar
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -391,6 +472,38 @@ function MatchCard({ match, isAdmin, onLoad, onEdit, onConfirm }) {
   );
 }
 
+function TeamName({ name, align }) {
+  const alignment = align === 'right' ? 'text-right' : 'text-left';
 
+  return (
+    <div className={`min-w-0 ${alignment}`}>
+      <span className="text-sm sm:text-base md:text-lg font-bold text-white leading-tight break-words">
+        {name}
+      </span>
+    </div>
+  );
+}
 
+function getStatusData(match) {
+  let data = {
+    label: 'Programado',
+    border: 'border-orange-500',
+    badge: 'bg-orange-500/20 text-orange-200 border-orange-400/40'
+  };
 
+  if (isLiveMatch(match)) {
+    data = {
+      label: 'En vivo',
+      border: 'border-green-500',
+      badge: 'bg-green-500/20 text-green-200 border-green-400/40'
+    };
+  } else if (isFinishedMatch(match)) {
+    data = {
+      label: 'Finalizado',
+      border: 'border-gray-500',
+      badge: 'bg-gray-500/20 text-gray-200 border-gray-400/40'
+    };
+  }
+
+  return data;
+}
