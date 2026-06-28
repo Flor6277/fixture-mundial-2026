@@ -1,5 +1,5 @@
 const pool = require("../database");
-const { recalcularTodasLasTablas } = require("../utils/tournament");
+const { recalcularTodasLasTablas, avanzarGanador } = require("../utils/tournament");
 const https = require("https");
 
 const WORLD_CUP_26_API_URL = process.env.WORLD_CUP_26_API_URL || "https://worldcup26.ir/get/games";
@@ -133,10 +133,28 @@ function parseMinute(value) {
   return result;
 }
 
-async function findLocalMatch(client, game) {
-  const homeCode = TEAM_TO_CODE[game.home_team_name_en];
-  const awayCode = TEAM_TO_CODE[game.away_team_name_en];
+function getWinnerAndLoser(match, homeScore, awayScore) {
+  let result = {
+    winnerId: null,
+    loserId: null
+  };
 
+  if (homeScore > awayScore) {
+    result = {
+      winnerId: match.home_country_id,
+      loserId: match.away_country_id
+    };
+  } else if (awayScore > homeScore) {
+    result = {
+      winnerId: match.away_country_id,
+      loserId: match.home_country_id
+    };
+  }
+
+  return result;
+}
+
+async function findGroupStageMatch(client, game, homeCode, awayCode) {
   let match = null;
 
   if (homeCode && awayCode && game.group) {
@@ -165,6 +183,48 @@ async function findLocalMatch(client, game) {
   return match;
 }
 
+async function findKnockoutMatch(client, homeCode, awayCode) {
+  let match = null;
+
+  if (homeCode && awayCode) {
+    const result = await client.query(`
+      SELECT
+        m.*,
+        hc.fifa_code AS home_code,
+        ac.fifa_code AS away_code
+      FROM matches m
+      JOIN countries hc ON hc.id = m.home_country_id
+      JOIN countries ac ON ac.id = m.away_country_id
+      WHERE m.phase <> 'group_stage'
+        AND hc.fifa_code = $1
+        AND ac.fifa_code = $2
+      ORDER BY m.match_number
+      LIMIT 1
+    `, [homeCode, awayCode]);
+
+    if (result.rows.length > 0) {
+      match = result.rows[0];
+    }
+  }
+
+  return match;
+}
+
+async function findLocalMatch(client, game) {
+  const homeCode = TEAM_TO_CODE[game.home_team_name_en];
+  const awayCode = TEAM_TO_CODE[game.away_team_name_en];
+
+  let match = null;
+
+  if (game.type === "group") {
+    match = await findGroupStageMatch(client, game, homeCode, awayCode);
+  } else {
+    match = await findKnockoutMatch(client, homeCode, awayCode);
+  }
+
+  return match;
+}
+
 async function updateFinishedMatch(client, match, game, summary) {
   const homeScore = parseScore(game.home_score);
   const awayScore = parseScore(game.away_score);
@@ -173,6 +233,11 @@ async function updateFinishedMatch(client, match, game, summary) {
     if (match.is_confirmed) {
       summary.confirmedSkipped += 1;
     } else {
+      const isKnockout = match.phase !== "group_stage";
+      const winnerData = isKnockout
+        ? getWinnerAndLoser(match, homeScore, awayScore)
+        : { winnerId: null, loserId: null };
+
       const result = await client.query(`
         UPDATE matches
         SET home_score = $1,
@@ -186,27 +251,43 @@ async function updateFinishedMatch(client, match, game, summary) {
               ORDER BY id
               LIMIT 1
             ),
+            winner_country_id = $3,
+            loser_country_id = $4,
             live_status = 'finished',
             live_minute = NULL,
             live_second = NULL,
             live_home_score = $1,
             live_away_score = $2,
             updated_at = CURRENT_TIMESTAMP
-        WHERE id = $3
+        WHERE id = $5
           AND is_confirmed = false
           AND (
             home_score IS DISTINCT FROM $1 OR
             away_score IS DISTINCT FROM $2 OR
             status IS DISTINCT FROM 'played' OR
             live_status IS DISTINCT FROM 'finished' OR
-            is_confirmed IS DISTINCT FROM true
+            is_confirmed IS DISTINCT FROM true OR
+            winner_country_id IS DISTINCT FROM $3 OR
+            loser_country_id IS DISTINCT FROM $4
           )
-        RETURNING group_id
-      `, [homeScore, awayScore, match.id]);
+        RETURNING group_id, match_number, phase, winner_country_id, loser_country_id
+      `, [
+        homeScore,
+        awayScore,
+        winnerData.winnerId,
+        winnerData.loserId,
+        match.id
+      ]);
 
       if (result.rowCount > 0) {
         summary.finishedUpdated += 1;
-        summary.groupsToRecalculate.add(result.rows[0].group_id);
+
+        if (match.phase === "group_stage") {
+          summary.groupsToRecalculate.add(result.rows[0].group_id);
+        } else if (winnerData.winnerId) {
+          summary.knockoutUpdated += 1;
+          await avanzarGanador(match.match_number, winnerData.winnerId, winnerData.loserId);
+        }
       }
     }
   }
@@ -248,8 +329,10 @@ async function syncWorldCup26Api() {
   const summary = {
     gamesRead: 0,
     groupGamesRead: 0,
+    knockoutGamesRead: 0,
     finishedUpdated: 0,
     liveUpdated: 0,
+    knockoutUpdated: 0,
     confirmedSkipped: 0,
     notFound: [],
     groupsToRecalculate: new Set()
@@ -262,32 +345,35 @@ async function syncWorldCup26Api() {
     summary.gamesRead = games.length;
 
     for (const game of games) {
+      const match = await findLocalMatch(client, game);
+
       if (game.type === "group") {
         summary.groupGamesRead += 1;
+      } else {
+        summary.knockoutGamesRead += 1;
+      }
 
-        const match = await findLocalMatch(client, game);
+      if (match) {
+        const finished = normalizeFinished(game.finished);
+        const statusText = String(game.time_elapsed || "").toLowerCase();
 
-        if (match) {
-          const finished = normalizeFinished(game.finished);
-          const statusText = String(game.time_elapsed || "").toLowerCase();
-
-          if (finished || isFinishedText(statusText)) {
-            await updateFinishedMatch(client, match, game, summary);
-          } else if (!isNotStarted(statusText)) {
-            await updateLiveMatch(client, match, game, summary);
-          }
-        } else {
-          summary.notFound.push({
-            id: game.id,
-            group: game.group,
-            home: game.home_team_name_en,
-            away: game.away_team_name_en
-          });
+        if (finished || isFinishedText(statusText)) {
+          await updateFinishedMatch(client, match, game, summary);
+        } else if (!isNotStarted(statusText)) {
+          await updateLiveMatch(client, match, game, summary);
         }
+      } else {
+        summary.notFound.push({
+          id: game.id,
+          type: game.type,
+          group: game.group,
+          home: game.home_team_name_en,
+          away: game.away_team_name_en
+        });
       }
     }
 
-    if (summary.finishedUpdated > 0) {
+    if (summary.groupsToRecalculate.size > 0) {
       await recalcularTodasLasTablas();
     }
 
